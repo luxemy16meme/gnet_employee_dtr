@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in - DTR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="wrap">
+    <div class="login-wrapper">
+        <h1>Log in</h1>
+        <form id="loginForm">
+          <label>Email
+            <input type="email" id="email" required autocomplete="email">
+          </label>
+          <label>Password
+            <input type="password" id="password" required autocomplete="current-password">
+          </label>
+          <button type="submit" id="loginBtn" class="primary">Log in</button>
+          <p id="msg" class="msg error"></p>
+        </form>
+        <p class="msg">No account? Ask your supervisor to create one.</p>
+    </div>
+    
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    async function goByRole(userId) {
+      const { data: profile } = await db.from("profiles").select("role").eq("id", userId).single();
+      const isSup = profile && ["supervisor", "admin"].includes(profile.role);
+      location.replace(isSup ? "admin.html" : "submit.html");
+    }
+
+    // Already logged in? Skip the form.
+    db.auth.getSession().then(({ data }) => { if (data.session) goByRole(data.session.user.id); });
+
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("loginBtn");
+      const msg = document.getElementById("msg");
+      btn.disabled = true; btn.textContent = "Logging in..."; msg.textContent = "";
+
+      const { data, error } = await db.auth.signInWithPassword({
+        email: document.getElementById("email").value,
+        password: document.getElementById("password").value,
+      });
+      if (error) {
+        msg.textContent = "Wrong email or password.";
+        btn.disabled = false; btn.textContent = "Log in";
+        return;
+      }
+      goByRole(data.user.id);
+    });
+  </script>
+</body>
+</html>

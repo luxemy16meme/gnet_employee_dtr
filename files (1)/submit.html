@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit attendance - DTR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <span id="userName"></span>
+    <button id="logoutBtn" class="link">Log out</button>
+  </header>
+
+  <main class="wrap">
+    <h1>Submit attendance</h1>
+
+    <div class="toggle">
+      <button type="button" id="btnIn" class="active">Time in</button>
+      <button type="button" id="btnOut">Time out</button>
+    </div>
+
+    <label>Photo of your DTR with the timestamp
+      <input type="file" id="photo" accept="image/*" capture="environment">
+    </label>
+    <img id="preview" alt="DTR preview">
+
+    <button id="submitBtn" class="primary">Submit attendance</button>
+    <p id="msg" class="msg"></p>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    let type = "time_in";
+    let profile = null;
+
+    requireLogin().then((p) => { profile = p; });
+
+    const msg = document.getElementById("msg");
+    const btnIn = document.getElementById("btnIn");
+    const btnOut = document.getElementById("btnOut");
+    const photoInput = document.getElementById("photo");
+    const preview = document.getElementById("preview");
+    const submitBtn = document.getElementById("submitBtn");
+
+    function setMsg(text, kind) { msg.textContent = text; msg.className = "msg " + (kind || ""); }
+
+    btnIn.onclick = () => { type = "time_in"; btnIn.classList.add("active"); btnOut.classList.remove("active"); };
+    btnOut.onclick = () => { type = "time_out"; btnOut.classList.add("active"); btnIn.classList.remove("active"); };
+
+    photoInput.addEventListener("change", () => {
+      const file = photoInput.files[0];
+      if (!file) { preview.style.display = "none"; return; }
+      preview.src = URL.createObjectURL(file);
+      preview.style.display = "block";
+    });
+
+    function getLocation() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error("This browser does not support location."));
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true, timeout: 15000, maximumAge: 0,
+        });
+      });
+    }
+
+    // Shrink big phone photos to max 1600px JPEG so uploads are fast
+    function compressImage(file, maxSize = 1600, quality = 0.8) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("Could not read photo."))), "image/jpeg", quality);
+          URL.revokeObjectURL(img.src);
+        };
+        img.onerror = () => reject(new Error("Could not read photo."));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    submitBtn.addEventListener("click", async () => {
+      const file = photoInput.files[0];
+      if (!file) return setMsg("Take a photo of your DTR first.", "error");
+
+      submitBtn.disabled = true;
+      let uploadedPath = null;
+      try {
+        setMsg("Getting your location...");
+        const pos = await getLocation();
+
+        const { data: sess } = await db.auth.getSession();
+        if (!sess.session) throw new Error("Please log in again.");
+        const userId = sess.session.user.id;
+
+        setMsg("Uploading photo...");
+        const blob = await compressImage(file);
+        uploadedPath = userId + "/" + Date.now() + ".jpg";
+        const { error: upErr } = await db.storage.from("dtr-photos")
+          .upload(uploadedPath, blob, { contentType: "image/jpeg" });
+        if (upErr) throw new Error("Photo upload failed. Try again.");
+
+        setMsg("Checking your location...");
+        const { error: rpcErr } = await db.rpc("submit_attendance", {
+          p_lat: pos.coords.latitude,
+          p_lng: pos.coords.longitude,
+          p_accuracy: pos.coords.accuracy,
+          p_type: type,
+          p_photo_path: uploadedPath,
+        });
+        if (rpcErr) {
+          await db.storage.from("dtr-photos").remove([uploadedPath]);  // clean up
+          throw new Error(rpcErr.message);
+        }
+
+        setMsg("Attendance submitted.", "ok");
+        photoInput.value = ""; preview.style.display = "none";
+      } catch (e) {
+        const text = e.code === 1
+          ? "Location access denied. Allow location for this site in your browser settings."
+          : e.code === 3 ? "Could not get your location in time. Move near a window and try again."
+          : e.message;
+        setMsg(text, "error");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

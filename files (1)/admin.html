@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attendance review - DTR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <span id="userName"></span>
+    <button id="logoutBtn" class="link">Log out</button>
+  </header>
+
+  <main class="wrap wide">
+    <h1>Attendance review</h1>
+    <p id="msg" class="msg error"></p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Trainee</th><th>Area</th><th>Type</th><th>Submitted</th>
+            <th>Distance</th><th>GPS accuracy</th><th>Photo</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const tbody = document.getElementById("rows");
+    const msg = document.getElementById("msg");
+
+    function cell(text) {
+      const td = document.createElement("td");
+      td.textContent = text;          // textContent, never innerHTML, for user data
+      return td;
+    }
+
+    async function load() {
+      msg.textContent = "";
+      const { data, error } = await db
+        .from("attendance")
+        .select("*, profiles(full_name), areas(name)")
+        .order("submitted_at", { ascending: false })
+        .limit(100);
+      if (error) { msg.textContent = error.message; return; }
+
+      tbody.innerHTML = "";
+      for (const r of data) {
+        const tr = document.createElement("tr");
+        tr.append(
+          cell(r.profiles?.full_name ?? ""),
+          cell(r.areas?.name ?? ""),
+          cell(r.type === "time_in" ? "Time in" : "Time out"),
+          cell(new Date(r.submitted_at).toLocaleString("en-PH", { timeZone: "Asia/Manila" })),
+          cell(Math.round(r.distance_m) + " m"),
+          cell(r.accuracy_m == null ? "n/a" : Math.round(r.accuracy_m) + " m"),
+        );
+
+        // Photo: signed link that expires in 1 hour
+        const photoTd = document.createElement("td");
+        const { data: signed } = await db.storage.from("dtr-photos").createSignedUrl(r.photo_path, 3600);
+        if (signed) {
+          const a = document.createElement("a");
+          a.href = signed.signedUrl; a.target = "_blank"; a.rel = "noopener";
+          const img = document.createElement("img");
+          img.src = signed.signedUrl; img.className = "thumb"; img.alt = "DTR photo";
+          a.append(img); photoTd.append(a);
+        }
+        tr.append(photoTd);
+
+        const statusTd = cell(r.status);
+        statusTd.className = "status-" + r.status;
+        tr.append(statusTd);
+
+        const actionTd = document.createElement("td");
+        actionTd.className = "row-actions";
+        for (const [label, status] of [["Approve", "approved"], ["Reject", "rejected"]]) {
+          const b = document.createElement("button");
+          b.textContent = label;
+          b.onclick = async () => {
+            const { error } = await db.rpc("review_attendance", { p_id: r.id, p_status: status });
+            if (error) msg.textContent = error.message; else load();
+          };
+          actionTd.append(b);
+        }
+        tr.append(actionTd);
+        tbody.append(tr);
+      }
+    }
+
+    requireLogin(["supervisor", "admin"]).then(load);
+  </script>
+</body>
+</html>
